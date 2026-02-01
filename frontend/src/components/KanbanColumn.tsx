@@ -32,28 +32,26 @@ export const KanbanColumn = ({
     <section
       ref={setNodeRef}
       className={clsx(
-        "flex min-h-[520px] flex-col rounded-3xl border border-[var(--stroke)] bg-[var(--surface-strong)] p-4 shadow-[var(--shadow)] transition",
+        "flex min-h-[480px] flex-col rounded-2xl border border-[var(--stroke)] bg-[var(--surface)] p-3 transition",
         isColumnOver && "ring-2 ring-[var(--accent-yellow)]"
       )}
       data-testid={`column-${column.id}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="w-full">
-          <div className="flex items-center gap-3">
-            <div className="h-2 w-10 rounded-full bg-[var(--accent-yellow)]" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
-              {cards.length} cards
-            </span>
-          </div>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className="h-2 w-2 shrink-0 rounded-full bg-[var(--accent-yellow)]" />
           <input
             value={column.title}
             onChange={(event) => onRename(column.id, event.target.value)}
-            className="mt-3 w-full bg-transparent font-display text-lg font-semibold text-[var(--navy-dark)] outline-none"
+            className="min-w-0 flex-1 truncate bg-transparent font-display text-sm font-semibold text-[var(--navy-dark)] outline-none"
             aria-label="Column title"
           />
         </div>
+        <span className="shrink-0 rounded-full bg-[var(--stroke)] px-2 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--gray-text)]">
+          {cards.length}
+        </span>
       </div>
-      <div className="mt-4 flex flex-1 flex-col gap-3">
+      <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
         <SortableContext
           id={column.id}
           items={column.cardIds.map((cardId) => `card-${cardId}`)}
@@ -69,8 +67,8 @@ export const KanbanColumn = ({
           ))}
         </SortableContext>
         {cards.length === 0 && (
-          <div className="flex flex-1 items-center justify-center rounded-2xl border border-dashed border-[var(--stroke)] px-3 py-6 text-center text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
-            Drop a card here
+          <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--stroke)] px-2 py-4 text-center text-[10px] font-medium uppercase tracking-wider text-[var(--gray-text)]">
+            Drop here
           </div>
         )}
       </div>
