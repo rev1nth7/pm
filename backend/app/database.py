@@ -164,13 +164,12 @@ def ensure_seed_data(conn: sqlite3.Connection, user_id: int) -> int:
     return board_id
 
 
-def fetch_board(conn: sqlite3.Connection, user_id: int) -> dict:
-    board_id = ensure_seed_data(conn, user_id)
-    board_row = conn.execute(
-        "SELECT id, title FROM boards WHERE id = ?",
-        (board_id,),
-    ).fetchone()
-
+def _build_board_response(
+    conn: sqlite3.Connection,
+    board_row: sqlite3.Row,
+    board_id: int,
+) -> dict:
+    """Build the full board response with columns, cards, and labels."""
     column_rows = conn.execute(
         "SELECT id, title, position FROM columns WHERE board_id = ? ORDER BY position",
         (board_id,),
@@ -188,7 +187,6 @@ def fetch_board(conn: sqlite3.Connection, user_id: int) -> dict:
         (board_id,),
     ).fetchall()
 
-    # Get labels for this board
     label_rows = conn.execute(
         "SELECT id, name, color FROM labels WHERE board_id = ?",
         (board_id,),
@@ -202,7 +200,6 @@ def fetch_board(conn: sqlite3.Connection, user_id: int) -> dict:
         for row in label_rows
     }
 
-    # Get card-label associations
     card_ids = [row["id"] for row in card_rows]
     card_label_rows = []
     if card_ids:
@@ -248,6 +245,15 @@ def fetch_board(conn: sqlite3.Connection, user_id: int) -> dict:
         "cards": cards_by_id,
         "labels": labels_by_id,
     }
+
+
+def fetch_board(conn: sqlite3.Connection, user_id: int) -> dict:
+    board_id = ensure_seed_data(conn, user_id)
+    board_row = conn.execute(
+        "SELECT id, title FROM boards WHERE id = ?",
+        (board_id,),
+    ).fetchone()
+    return _build_board_response(conn, board_row, board_id)
 
 
 def ordered_ids(rows: Iterable[sqlite3.Row]) -> list[int]:
@@ -345,84 +351,7 @@ def fetch_board_by_id(conn: sqlite3.Connection, board_id: int, user_id: int) -> 
     ).fetchone()
     if not board_row:
         return None
-
-    column_rows = conn.execute(
-        "SELECT id, title, position FROM columns WHERE board_id = ? ORDER BY position",
-        (board_id,),
-    ).fetchall()
-
-    card_rows = conn.execute(
-        """
-        SELECT id, column_id, title, details, position, due_date, priority
-        FROM cards
-        WHERE archived = 0 AND column_id IN (
-            SELECT id FROM columns WHERE board_id = ?
-        )
-        ORDER BY column_id, position
-        """,
-        (board_id,),
-    ).fetchall()
-
-    # Get labels for this board
-    label_rows = conn.execute(
-        "SELECT id, name, color FROM labels WHERE board_id = ?",
-        (board_id,),
-    ).fetchall()
-    labels_by_id = {
-        str(row["id"]): {
-            "id": str(row["id"]),
-            "name": row["name"],
-            "color": row["color"],
-        }
-        for row in label_rows
-    }
-
-    # Get card-label associations
-    card_ids = [row["id"] for row in card_rows]
-    card_label_rows = []
-    if card_ids:
-        placeholders = ",".join("?" * len(card_ids))
-        card_label_rows = conn.execute(
-            f"SELECT card_id, label_id FROM card_labels WHERE card_id IN ({placeholders})",
-            card_ids,
-        ).fetchall()
-
-    labels_by_card: dict[int, list[str]] = {row["id"]: [] for row in card_rows}
-    for row in card_label_rows:
-        labels_by_card[row["card_id"]].append(str(row["label_id"]))
-
-    cards_by_id = {
-        str(row["id"]): {
-            "id": str(row["id"]),
-            "title": row["title"],
-            "details": row["details"],
-            "due_date": row["due_date"],
-            "priority": row["priority"] or "none",
-            "labelIds": labels_by_card.get(row["id"], []),
-        }
-        for row in card_rows
-    }
-
-    cards_by_column: dict[int, list[str]] = {int(row["id"]): [] for row in column_rows}
-    for row in card_rows:
-        cards_by_column[int(row["column_id"])].append(str(row["id"]))
-
-    columns_payload = [
-        {
-            "id": str(row["id"]),
-            "title": row["title"],
-            "position": row["position"],
-            "cardIds": cards_by_column.get(int(row["id"]), []),
-        }
-        for row in column_rows
-    ]
-
-    return {
-        "board": {"id": str(board_row["id"]), "title": board_row["title"]},
-        "columns": columns_payload,
-        "cards": cards_by_id,
-        "labels": labels_by_id,
-    }
+    return _build_board_response(conn, board_row, board_id)
 
 
 def resequence_positions(

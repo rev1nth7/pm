@@ -25,8 +25,6 @@ const SparklesIcon = () => (
   </svg>
 );
 
-const initialFormState = { message: "" };
-
 type ChatSidebarProps = {
   messages: ChatMessage[];
   onSend: (message: string) => void;
@@ -40,16 +38,16 @@ export const ChatSidebar = ({
   isSending = false,
   error,
 }: ChatSidebarProps) => {
-  const [formState, setFormState] = useState(initialFormState);
+  const [message, setMessage] = useState("");
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const trimmed = formState.message.trim();
+    const trimmed = message.trim();
     if (!trimmed || isSending) {
       return;
     }
     onSend(trimmed);
-    setFormState(initialFormState);
+    setMessage("");
   };
 
   return (
@@ -85,16 +83,16 @@ export const ChatSidebar = ({
             </p>
           </div>
         ) : (
-          messages.map((message, index) => (
+          messages.map((msg, index) => (
             <div
-              key={`${message.role}-${index}`}
+              key={`${msg.role}-${index}`}
               className={
-                message.role === "user"
+                msg.role === "user"
                   ? "ml-6 self-end rounded-2xl rounded-br-md bg-[var(--primary-blue)] px-3 py-2 text-xs text-white"
                   : "mr-6 self-start rounded-2xl rounded-bl-md border border-[var(--stroke)] bg-white px-3 py-2 text-xs text-[var(--navy-dark)]"
               }
             >
-              {message.content}
+              {msg.content}
             </div>
           ))
         )}
@@ -108,10 +106,8 @@ export const ChatSidebar = ({
 
       <form onSubmit={handleSubmit} className="flex items-end gap-2 border-t border-[var(--stroke)] bg-white p-3">
         <textarea
-          value={formState.message}
-          onChange={(event) =>
-            setFormState((prev) => ({ ...prev, message: event.target.value }))
-          }
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();

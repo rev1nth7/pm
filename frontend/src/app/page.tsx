@@ -52,6 +52,10 @@ function clearStoredAuth(): void {
   localStorage.removeItem(BOARD_KEY);
 }
 
+function isUnauthorizedError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("401");
+}
+
 function getStoredBoardId(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem(BOARD_KEY);
@@ -91,6 +95,15 @@ export default function Home() {
     setIsLoading(false);
   }, []);
 
+  const handleSessionExpired = useCallback(() => {
+    clearStoredAuth();
+    setIsAuthenticated(false);
+    setAuthToken(null);
+    setUsername("");
+    setError("Session expired. Please sign in again.");
+    setIsLoading(false);
+  }, []);
+
   const refreshBoardsList = useCallback(async () => {
     if (!authToken) return;
     try {
@@ -99,17 +112,12 @@ export default function Home() {
       return response.boards;
     } catch (err) {
       if (process.env.NODE_ENV === "development") console.error(err);
-      if (err instanceof Error && err.message.includes("401")) {
-        clearStoredAuth();
-        setIsAuthenticated(false);
-        setAuthToken(null);
-        setUsername("");
-        setError("Session expired. Please sign in again.");
-        setIsLoading(false);
+      if (isUnauthorizedError(err)) {
+        handleSessionExpired();
       }
       return [];
     }
-  }, [authToken]);
+  }, [authToken, handleSessionExpired]);
 
   const loadBoard = useCallback(async (boardId: string) => {
     if (!authToken) return;
@@ -122,14 +130,9 @@ export default function Home() {
       setStoredBoardId(boardId);
     } catch (err) {
       if (process.env.NODE_ENV === "development") console.error(err);
-      if (err instanceof Error && err.message.includes("401")) {
-        clearStoredAuth();
-        setIsAuthenticated(false);
-        setAuthToken(null);
-        setUsername("");
-        setError("Session expired. Please sign in again.");
+      if (isUnauthorizedError(err)) {
+        handleSessionExpired();
       } else if (err instanceof Error && err.message.includes("404")) {
-        // Board not found, clear it and load default
         localStorage.removeItem(BOARD_KEY);
         setCurrentBoardId(null);
         setBoardError("Board not found.");
@@ -139,7 +142,7 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, [authToken]);
+  }, [authToken, handleSessionExpired]);
 
   const refreshBoard = useCallback(async () => {
     if (!authToken || !currentBoardId) return;

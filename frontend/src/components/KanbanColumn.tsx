@@ -56,7 +56,7 @@ export const KanbanColumn = ({
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
         <SortableContext
           id={column.id}
-          items={column.cardIds.map((cardId) => `card-${cardId}`)}
+          items={column.cardIds}
           strategy={verticalListSortingStrategy}
         >
           {cards.map((card) => (
