@@ -124,10 +124,37 @@ Status: VERIFIED. Backend `pytest` (8) covers login success/failure, `/api/me` s
 
 ---
 
-## Parts 5-10 (outlines, expanded before each is built)
+## Part 5 - Database modeling
 
-### Part 5 - Database modeling
-Propose a Kanban-as-JSON schema (multi-user ready, one board per user for the MVP). Document the approach in `docs/` and get sign-off before building.
+Goal: propose how the Kanban is persisted - a SQLite database that stores each user's board as a JSON document - then document it in `docs/` and get sign-off. This part is design and documentation only; no schema is built or wired up until Part 6.
+
+Approach: SQLite with two tables - `users` (multi-user ready) and `boards` (one row per user, the board stored as a JSON text column). The JSON mirrors the frontend `BoardData` shape in `frontend/src/lib/kanban.ts` exactly, so the same structure flows UI <-> API <-> DB with no translation. A JSON blob (rather than fully normalized column/card tables) is chosen because the whole board is read and written as a unit, and the AI will rewrite the board wholesale in Parts 9-10.
+
+Deliverable: a new `docs/DATABASE.md` containing:
+- [x] Storage decision and rationale: SQLite file created on first run if missing; board persisted as a JSON document; JSON-blob vs fully-normalized trade-off stated
+- [x] Table definitions (DDL) for:
+  - [x] `users` - `id` (PK), `username` (unique), `password_hash` (nullable for the MVP; hardcoded auth today, real users later), `created_at`
+  - [x] `boards` - `id` (PK), `user_id` (FK -> users, unique so it is one board per user), `data` (JSON text), `created_at`, `updated_at`
+- [x] The board JSON shape, matching `BoardData` exactly: `{ "columns": [{ "id", "title", "cardIds": [] }], "cards": { "<id>": { "id", "title", "details" } } }`, with a small example
+- [x] Seed/default behavior: when a user has no board yet, seed from the current `initialData` (5 columns, sample cards)
+- [x] DB file location and Docker persistence note: where the `.sqlite` file lives, and that a Docker volume is needed for it to survive container restarts (flagged for Part 6/Docker)
+- [x] How this maps to the parts ahead: Part 6 builds these tables and read/update routes; Parts 9-10 have the AI replace the `data` document
+
+Tests / checks (doc-stage, no code yet):
+- [x] The documented JSON shape is field-for-field consistent with `frontend/src/lib/kanban.ts` (`Card`, `Column`, `BoardData`)
+- [x] The DDL is internally consistent (PKs, the `boards.user_id` FK and uniqueness, JSON column) and the one-board-per-user MVP rule is explicit
+- [x] User reviews and signs off on `docs/DATABASE.md`
+
+Success criteria:
+- `docs/DATABASE.md` exists and clearly specifies the SQLite tables, the board JSON document shape, the create-on-first-run and seed behavior, and the Docker persistence consideration.
+- The JSON shape matches the existing frontend types exactly, so Part 6 can implement it with no schema surprises.
+- You have approved the design before any database code is written.
+
+Status: APPROVED. `docs/DATABASE.md` signed off; JSON shape cross-checked against `frontend/src/lib/kanban.ts`. Ready for Part 6.
+
+---
+
+## Parts 6-10 (outlines, expanded before each is built)
 
 ### Part 6 - Backend
 Add API routes to read and update a user's Kanban, backed by SQLite created on first run if missing. Thorough `pytest` coverage.
