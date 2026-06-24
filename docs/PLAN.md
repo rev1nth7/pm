@@ -1,37 +1,145 @@
-# High level steps for project
+# Project plan
 
-Part 1: Plan
+This document plans the build of the Project Management MVP described in the root `AGENTS.md`. It is built in 10 parts. Near-term parts (1-3) are detailed with substep checklists, tests, and success criteria; later parts (4-10) are outlines to be expanded just before each is built.
 
-Enrich this document to plan out each of these parts in detail, with substeps listed out as a checklist to be checked off by the agent, and with tests and success critieria for each. Also create an AGENTS.md file inside the frontend directory that describes the existing code there. Ensure the user checks and approves the plan.
+## Key decisions
 
-Part 2: Scaffolding
+- AI: use the existing standard OpenAI key (`api.openai.com`) with the most affordable current OpenAI model that supports Structured Outputs - `gpt-4.1-nano` (fallback `gpt-4o-mini`). This replaces the originally noted `openai/gpt-oss-120b`, which `api.openai.com` does not serve.
+- Serving: single process. Next.js builds to static files (`output: 'export'`); FastAPI serves them at `/` and the JSON API at `/api/*`. One Docker container.
+- Database: SQLite, created on first run.
+- Package manager: `uv` for the Python backend.
 
-Set up the Docker infrastructure, the backend in backend/ with FastAPI, and write the start and stop scripts in the scripts/ directory. This should serve example static HTML to confirm that a 'hello world' example works running locally and also make an API call.
+## Open item
 
-Part 3: Add in Frontend
+- The live `OPENAI_API_KEY` is committed in plaintext in `.env`. Recommend rotating it and confirming `.env` is gitignored. No change will be made to `.env` or git history without sign-off.
 
-Now update so that the frontend is statically built and served, so that the app has the demo Kanban board displayed at /. Comprehensive unit and integration tests.
+---
 
-Part 4: Add in a fake user sign in experience
+## Part 1 - Plan
 
-Now update so that on first hitting /, you need to log in with dummy credentials ("user", "password") in order to see the Kanban, and you can log out. Comprehensive tests.
+Goal: produce an approved, detailed plan and document the existing frontend.
 
-Part 5: Database modeling
+- [x] Enrich this `docs/PLAN.md` with detailed substeps, tests, and success criteria
+- [x] Create `frontend/AGENTS.md` describing the existing frontend
+- [x] User reviews and approves the plan
 
-Now propose a database schema for the Kanban, saving it as JSON. Document the database approach in docs/ and get user sign off.
+Tests / success criteria:
+- Both documents exist and accurately reflect the codebase, and the user approves before any code is written.
 
-Part 6: Backend
+## Part 2 - Scaffolding
 
-Now add API routes to allow the backend to read and change the Kanban for a given user; test this thoroughly with backend unit tests. The database should be created if it doesn't exist.
+Goal: stand up the Docker + FastAPI infrastructure and start/stop scripts, serving a hello-world page and a hello-world API.
 
-Part 7: Frontend + Backend
+- [x] Create `backend/` Python project managed by `uv` (`pyproject.toml`): `fastapi`, `uvicorn`; dev deps `pytest`, `httpx`
+- [x] `backend/app/main.py`: FastAPI app with
+  - [x] `GET /api/health` returning `{"status": "ok"}`
+  - [x] `GET /api/hello` returning `{"message": "hello world"}`
+  - [x] serve a placeholder `index.html` at `/`
+- [x] `Dockerfile` (python base image, install `uv`, install deps, copy app, run `uvicorn` on a fixed port) and `.dockerignore`
+- [x] `scripts/` start and stop scripts that build/run/stop the container:
+  - [x] Mac/Linux: `start.sh`, `stop.sh`
+  - [x] Windows: `start.ps1` + `start.bat`, `stop.ps1` + `stop.bat`
 
-Now have the frontend actually use the backend API, so that the app is a proper persistent Kanban board. Test very throughly.
+Tests:
+- `pytest` (using FastAPI `TestClient`/`httpx`) asserts `/api/health` and `/api/hello` return the expected JSON. PASSING (3/3).
+- Manual: build and run the container; load `/` (hello-world HTML) and hit `/api/hello` (JSON).
 
-Part 8: AI connectivity
+Success criteria:
+- The container builds and runs; `/` serves hello-world HTML; `/api/hello` returns JSON; the start/stop scripts work on this machine.
+- Status: VERIFIED. Image builds (`docker build -t pm-mvp .`) and the running container returns 200 with expected content for `/api/health`, `/api/hello`, and `/` (port 8000 mapped).
 
-Now allow the backend to make an AI call via OpenRouter. Test connectivity with a simple "2+2" test and ensure the AI call is working.
+## Part 3 - Add in Frontend
 
-Part 9: Now extend the backend call so that it always calls the AI with the JSON of the Kanban board, plus the user's question (and conversation history). The AI should respond with Structured Outputs that includes the response to the user and optionaly an update to the Kanban. Test thoroughly.
+Goal: statically build the existing frontend and serve the demo Kanban board at `/` from the same FastAPI process (and container) that serves `/api/*`.
 
-Part 10: Now add a beautiful sidebar widget to the UI supporting full AI chat, and allowing the LLM (as it determines) to update the Kanban based on its Structured Outputs. If the AI updates the Kanban, then the UI should refresh automatically.
+Configure the static export:
+- [x] Add `output: 'export'` and `images.unoptimized: true` to `frontend/next.config.ts`
+- [x] Run `npm run build` in `frontend/` and confirm it produces an `out/` folder containing `index.html` and a `_next/` assets folder
+- [x] Add `out/` to `frontend/.gitignore` (build artifact, not committed)
+
+Serve the build from FastAPI:
+- [x] Decide on the served location: FastAPI serves a static directory (e.g. `backend/app/static`) that holds the exported site
+- [x] Replace the Part 2 placeholder `index.html` with the real exported build (kept out of git; populated by the build/Docker step)
+- [x] Confirm `app.mount("/", StaticFiles(..., html=True))` serves the board and that `/api/health` and `/api/hello` still work (API routes registered before the mount keep priority)
+
+Containerize as one image:
+- [x] Convert `Dockerfile` to multi-stage: a Node stage runs `npm ci` + `npm run build` in `frontend/`; the Python stage copies the resulting `out/` into the served static directory
+- [x] Update `.dockerignore` so frontend `node_modules`, `.next`, and `out` are not sent as build context (they are produced inside the image)
+- [x] `scripts/start.*` and `stop.*` continue to work unchanged
+
+Tests:
+- [x] Frontend unit tests pass: `npm run test:unit` (3 tests)
+- [x] Frontend e2e tests pass: `npm run test:e2e` (Playwright, 3 tests)
+- [x] Backend `pytest` updated/added: asserts `/` returns 200 and contains real board markup (e.g. a known column title like "Backlog"), and that a `_next/` asset returns 200
+- [x] Existing `/api/health` and `/api/hello` tests still pass
+- [x] Manual: build and run the container, open `http://localhost:8000`, see the Kanban board, drag a card, add a card
+
+Success criteria:
+- `npm run build` produces a static `out/` with no server-only errors.
+- Opening `/` (both via local uvicorn and via the running container) renders the real demo Kanban board, not the hello-world placeholder.
+- The board is interactive (drag-and-drop and add-card work) since it is fully client-side.
+- `/api/health` and `/api/hello` still return their JSON.
+- A single `docker build` produces one image that serves both the UI and the API on port 8000; start/stop scripts work.
+- All four test suites are green (frontend unit, frontend e2e, backend pytest, and a manual smoke check).
+
+Status: VERIFIED. `npm run build` produces a clean static `out/`; frontend unit (6) and e2e (3, Chromium) pass; backend `pytest` (3) passes. The multi-stage `docker build` produces one image whose running container serves the real Kanban board at `/` (contains "Backlog", placeholder gone), serves a hashed `/_next/*` asset (200), and returns `/api/health` and `/api/hello` JSON.
+
+---
+
+## Part 4 - Fake user sign in
+
+Goal: require a login (hardcoded `user` / `password`) before the Kanban board is shown, with a working logout. Because the frontend is a static export with no Next.js server, gating is done client-side against FastAPI auth endpoints, with the session held in an HTTP-only signed cookie.
+
+Approach: add auth endpoints to FastAPI using Starlette `SessionMiddleware` (signed cookie, no DB needed yet). The frontend asks "am I logged in?" on load and shows either the login screen or the board.
+
+Backend (auth API):
+- [x] Add `SessionMiddleware` with a `SECRET_KEY` (env var, dev default) to the FastAPI app
+- [x] `POST /api/login` `{username, password}`: validate against hardcoded `user` / `password`; on success set the session and return `{ "authenticated": true, "username": "user" }`; on failure return `401`
+- [x] `POST /api/logout`: clear the session, return `{ "authenticated": false }`
+- [x] `GET /api/me`: return `{ "authenticated": bool, "username": str | null }` from the session cookie
+- [x] Keep `/api/health` and `/api/hello` public (no auth required)
+
+Frontend (login gate):
+- [x] On load, call `GET /api/me`; while pending show a minimal loading state
+- [x] If not authenticated, render a `Login` screen (username + password fields, submit, error message) styled with the brand colors; otherwise render the existing `KanbanBoard`
+- [x] `Login` submit calls `POST /api/login`; on success re-check `/api/me` (or use its response) to reveal the board; on `401` show an inline error and keep the form
+- [x] Add a logout control in the board header that calls `POST /api/logout` and returns to the login screen
+- [x] Use credentialed fetches (`credentials: "include"`) so the session cookie is sent; centralize calls in a small `lib/auth.ts`
+- [x] No credentials or tokens stored in `localStorage` (rely on the HTTP-only cookie)
+
+Tests:
+- [x] Backend `pytest`: `/api/login` with correct creds returns 200 and sets a session cookie; wrong creds return 401; `/api/me` reflects logged-in vs logged-out; `/api/logout` clears the session; `/api/health` stays public
+- [x] Frontend unit (Vitest): `Login` renders, shows an error on rejected login, and the gate renders the board when `/api/me` reports authenticated (fetch mocked)
+- [x] Frontend e2e (Playwright): visiting `/` shows the login screen; wrong creds show an error and no board; `user` / `password` reveals the board; logout returns to the login screen; reload while logged in stays on the board
+- [x] Manual: same flow in the running container
+
+Success criteria:
+- Visiting `/` while logged out shows the login screen, not the board.
+- Correct creds (`user` / `password`) reveal the board; wrong creds show an error and never reveal it.
+- Logout returns to the login screen; reloading while logged in keeps you on the board (cookie persists); reloading while logged out shows login.
+- The session is carried in an HTTP-only signed cookie; no secrets in `localStorage`.
+- All suites green (backend pytest, frontend unit, frontend e2e) and the container smoke test passes.
+
+Status: VERIFIED. Backend `pytest` (8) covers login success/failure, `/api/me` state, logout, and public health. Frontend unit (10) covers `Login` (error + success) and the `AuthGate` (login vs board). Frontend e2e (4) covers the gated board plus the login flow (bad creds error, then board revealed). Container smoke: logged-out `authenticated=false`; wrong creds `401`; correct creds set an HTTP-only `session` cookie and `/api/me` reports `authenticated=true`; logout clears it; `/api/health` stays public.
+
+---
+
+## Parts 5-10 (outlines, expanded before each is built)
+
+### Part 5 - Database modeling
+Propose a Kanban-as-JSON schema (multi-user ready, one board per user for the MVP). Document the approach in `docs/` and get sign-off before building.
+
+### Part 6 - Backend
+Add API routes to read and update a user's Kanban, backed by SQLite created on first run if missing. Thorough `pytest` coverage.
+
+### Part 7 - Frontend + Backend
+Wire the board to the backend API for real persistence. Includes adding card-detail editing (a current frontend gap). Thorough unit and integration tests.
+
+### Part 8 - AI connectivity
+Add a backend OpenAI call; validate end to end with a simple "2+2" connectivity test.
+
+### Part 9 - AI with Structured Outputs
+Always call the AI with the board JSON plus the user's question and conversation history. The AI returns Structured Outputs containing a user-facing reply and an optional board update. Thorough tests.
+
+### Part 10 - AI chat sidebar
+Add a polished sidebar chat widget. When the AI returns a board update, apply it and refresh the UI automatically.

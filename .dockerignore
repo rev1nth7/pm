@@ -1,0 +1,11 @@
+.git
+.env
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/node_modules
+**/.next
+**/out
+# The served static dir is populated from the frontend build stage, not the host.
+backend/app/static

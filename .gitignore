@@ -174,3 +174,7 @@ cython_debug/
 
 .DS_Store
 
+# Built frontend served by the backend (populated by the build / Docker step)
+backend/app/static/*
+!backend/app/static/.gitkeep
+

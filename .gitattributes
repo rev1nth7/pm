@@ -1,0 +1,16 @@
+# Normalize line endings: text files stored as LF in the repo.
+* text=auto eol=lf
+
+# Windows-only scripts must stay CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Shell scripts must stay LF (CRLF breaks the shebang on Mac/Linux).
+*.sh text eol=lf
+
+# Binary assets (never normalize).
+*.png binary
+*.ico binary
+*.jpg binary
+*.woff binary
+*.woff2 binary
