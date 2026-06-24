@@ -178,3 +178,6 @@ cython_debug/
 backend/app/static/*
 !backend/app/static/.gitkeep
 
+# SQLite database (runtime state, created on first run)
+backend/data/
+

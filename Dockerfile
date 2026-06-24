@@ -26,6 +26,9 @@ RUN uv sync --no-dev
 COPY backend/ ./
 COPY --from=frontend /frontend/out ./app/static
 
+# SQLite database location. Mount a volume here to persist across restarts.
+ENV DATABASE_PATH=/app/data/app.db
+
 EXPOSE 8000
 
 CMD ["uv", "run", "--no-dev", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

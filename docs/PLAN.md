@@ -154,10 +154,48 @@ Status: APPROVED. `docs/DATABASE.md` signed off; JSON shape cross-checked agains
 
 ---
 
-## Parts 6-10 (outlines, expanded before each is built)
+## Part 6 - Backend (database + board API)
 
-### Part 6 - Backend
-Add API routes to read and update a user's Kanban, backed by SQLite created on first run if missing. Thorough `pytest` coverage.
+Goal: implement the approved `docs/DATABASE.md` design - a SQLite database created on first run - and add authenticated API routes to read and update the signed-in user's board. Backend only; the frontend is wired to these routes in Part 7.
+
+Approach: use the Python standard-library `sqlite3` (no ORM - keep it simple). A small data layer creates the schema on first run, ensures the MVP `user` exists, seeds a default board when the user has none, and reads/writes the board as a JSON document. The board routes require an authenticated session (reusing Part 4's cookie) and validate the board shape with Pydantic models mirroring `BoardData`.
+
+Data layer (`backend/app/`):
+- [x] `db.py`: resolve the DB path from `DATABASE_PATH` (default `backend/data/app.db`), open connections, and `init_db()` that creates the `users` and `boards` tables if missing (per `docs/DATABASE.md`)
+- [x] Default board lives on the backend (e.g. `seed.py`) as a Python dict matching `initialData` (5 columns + sample cards)
+- [x] Board access helpers: `ensure_user(username)`, `get_board(username)` (seed-on-first-access if no row), `save_board(username, data)` (updates `data` and `updated_at`)
+- [x] `init_db()` runs at app startup; the `data/` directory is created if missing and is gitignored
+
+Board API (auth-protected, JSON shape validated):
+- [x] Pydantic models `Card`, `Column`, `BoardData` matching the frontend types
+- [x] A dependency that returns the session user or raises `401` when not logged in
+- [x] `GET /api/board`: return the current user's board (seeding the default if none exists)
+- [x] `PUT /api/board`: replace the current user's board with the validated payload; return the saved board; invalid shape returns `422`
+- [x] `create_app()` accepts the DB path (default from env) so tests use an isolated database
+
+Persistence / Docker:
+- [x] Add `backend/data/` to gitignore; ensure the DB file is created if it does not exist
+- [x] Dockerfile/scripts: set `DATABASE_PATH` to a mounted location (e.g. `/app/data/app.db`) and mount a named volume (e.g. `-v pm-data:/app/data`) so the board survives container restarts; update `scripts/start.*`
+
+Tests (`pytest`, isolated tmp database per test):
+- [x] `init_db()` creates the database file and both tables when absent
+- [x] `GET /api/board` while logged in seeds and returns the default board; a second call returns the same board
+- [x] `PUT /api/board` persists changes - a follow-up `GET` reflects them, and `updated_at` advances
+- [x] `GET`/`PUT` without a session return `401`; a malformed board payload returns `422`
+- [x] Existing Part 2/4 tests still pass (health, hello, auth)
+- [x] Manual: in the running container, log in, `GET /api/board`, `PUT` a change, restart the container, and confirm the change persisted (volume)
+
+Success criteria:
+- A fresh start with no database creates `app.db` with the `users` and `boards` tables and no errors.
+- A logged-in user gets a seeded default board on first read; an anonymous request is rejected with `401`.
+- Updating the board persists across requests (and across container restarts when the volume is mounted); invalid payloads are rejected with `422`.
+- All backend tests green (new board tests plus the existing suites), and the board JSON returned matches the frontend `BoardData` shape exactly.
+
+Status: VERIFIED (container volume check deferred - Docker daemon down). Backend `pytest` 15 passed (7 new board tests: init creates file+tables, seed-on-first-read, identical second read, PUT persists, `401` without session, `422` on bad payload, `updated_at` advances). Local run proved restart persistence: anon `GET /api/board` -> `401`; login seeds 5-column default; `PUT` renamed a column; after stopping and restarting uvicorn on the same DB file the rename survived (PERSISTENCE: PASS) - the behavior the `pm-data` volume preserves in Docker. Dockerfile sets `DATABASE_PATH=/app/data/app.db` and `scripts/start.*` mount `-v pm-data:/app/data`; rerun the container smoke once Docker is up to close the volume loop.
+
+---
+
+## Parts 7-10 (outlines, expanded before each is built)
 
 ### Part 7 - Frontend + Backend
 Wire the board to the backend API for real persistence. Includes adding card-detail editing (a current frontend gap). Thorough unit and integration tests.
