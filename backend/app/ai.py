@@ -7,12 +7,16 @@ the real ceiling.
 """
 
 import os
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from openai import OpenAI
+from pydantic import BaseModel
 
 DEFAULT_MODEL = "gpt-4.1-nano"  # cheapest capable model; fallback gpt-4o-mini
 PING_MAX_TOKENS = 16  # a bare number answer needs almost nothing
+BOARD_MAX_TOKENS = 2000  # enough to return a full board, but no higher
+
+T = TypeVar("T", bound=BaseModel)
 
 
 class AIError(Exception):
@@ -26,6 +30,8 @@ class AIClient(Protocol):
     model: str
 
     def ask(self, prompt: str) -> str: ...
+
+    def parse(self, messages: list[dict], response_format: type[T]) -> T: ...
 
 
 class OpenAIClient:
@@ -52,3 +58,21 @@ class OpenAIClient:
         except Exception as exc:  # network/auth/rate-limit etc.
             raise AIError("OpenAI request failed") from exc
         return (response.choices[0].message.content or "").strip()
+
+    def parse(self, messages: list[dict], response_format: type[T], max_tokens: int = BOARD_MAX_TOKENS) -> T:
+        client = self._ensure_client()
+        try:
+            completion = client.chat.completions.parse(
+                model=self.model,
+                messages=messages,
+                response_format=response_format,
+                max_completion_tokens=max_tokens,
+            )
+        except Exception as exc:
+            raise AIError("OpenAI request failed") from exc
+        message = completion.choices[0].message
+        if message.refusal:
+            raise AIError("OpenAI refused the request")
+        if message.parsed is None:
+            raise AIError("OpenAI returned no parseable result")
+        return message.parsed

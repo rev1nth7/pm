@@ -284,10 +284,68 @@ Status: VERIFIED (container build/manual deferred - Docker daemon down). All Ope
 
 ---
 
-## Parts 9-10 (outlines, expanded before each is built)
+## Part 9 - AI with Structured Outputs
 
-### Part 9 - AI with Structured Outputs
-Always call the AI with the board JSON plus the user's question and conversation history. The AI returns Structured Outputs containing a user-facing reply and an optional board update. Thorough tests.
+Goal: turn the Part 8 connectivity plumbing into a real board assistant. Add an authenticated chat endpoint that, on every message, sends the user's current board plus the conversation history to the model and gets back OpenAI Structured Outputs: a user-facing reply and an optional full board update. The model can thereby create, edit, move, and delete cards (and rename columns) by returning a revised board. Backend only; the sidebar UI is Part 10.
+
+Approach: extend `app/ai.py` with a generic `parse(messages, response_format) -> BaseModel` that uses OpenAI Structured Outputs (`chat.completions.parse` with a strict Pydantic schema), keeping `ai.py` decoupled from the board models and still injectable for tests. A new `POST /api/ai/chat` builds the request: a system prompt stating the assistant's rules, the user's current board (loaded server-side from the DB), and the recent conversation history sent by the client. The model returns `{ reply, board }` where `board` is either a complete new `BoardData` or `null` (no change). The board is rewritten wholesale (the Part 5 decision), so no diff/op format is needed.
+
+Persistence decision (flag for sign-off): when the model returns a board, the server validates it, persists it via the existing `save_board` (DB stays authoritative for the next turn), and returns it in the response. Part 10's frontend then simply refreshes its UI to the returned board - no separate `PUT` and no client/server race.
+
+Structured Outputs schema (`app/ai.py` / models):
+- [x] Define a Pydantic `AIChatResponse { reply: str, board: AIBoard | None }`. Note: the AI-facing `AIBoard` uses `cards` as a **list** (reusing `Card`/`Column`), not `BoardData`'s `cards` map - OpenAI strict Structured Outputs does not support dynamic-key objects. The route converts the list back to the stored map shape.
+- [x] Extend `ai.py` with `parse(messages: list[dict], response_format: type[T], max_tokens) -> T` using `client.chat.completions.parse(...)` (strict Structured Outputs); return the parsed object
+- [x] Reuse Part 8's `AIError` for missing key / API failure / a refusal or unparsable result (key-free message)
+
+Chat endpoint (auth-protected):
+- [x] `POST /api/ai/chat` body `{ messages: [{ role: "user"|"assistant", content: str }] }`; require a non-empty latest user message (`422` otherwise)
+- [x] Depends on the session user (`401` when logged out); load that user's board server-side via `db.get_board` (seed if none)
+- [x] Build the model input: a system prompt (assistant rules) + the current board JSON + the recent history (cap to the last N messages, N=10, to bound input cost)
+- [x] Call `ai_client.parse(..., AIChatResponse)`; on `AIError` return `503` (no key leakage)
+- [x] If `board` is returned: validate it, `save_board`, and include it in the response; if `null`: leave the board unchanged
+- [x] Response shape `{ "reply": str, "board": BoardData | null }` (stored map shape)
+
+System prompt / rules (enforce the business constraints):
+- [x] Tell the model it manages a Kanban board: it may create, edit, move, and delete cards freely, and may rename columns
+- [x] Columns are fixed: the model must keep the same 5 column ids (rename titles only) - never add or remove columns
+- [x] New cards must use new unique ids that do not collide with existing ones; every `cardIds` entry must reference a card in `cards`, and every card must be referenced by exactly one column
+- [x] If the user only asks a question (no change needed), return `board: null` and just answer in `reply`
+
+Server-side validation of the model's board (defense in depth):
+- [x] Reject with `502` a returned board that drops/adds columns or changes column ids
+- [x] Reject a board whose `cardIds`/`cards` are inconsistent (dangling id, card not referenced, duplicate placement)
+- [x] Only persist a board that passes validation; never persist a malformed board
+
+Budget / cost control (calls are bigger than Part 8 - whole board + history each turn):
+- [x] Still `gpt-4.1-nano`, on-demand only; the OpenAI dashboard monthly hard limit remains the ceiling
+- [x] Cap `max_completion_tokens` high enough to return a full board but no higher (`BOARD_MAX_TOKENS=2000` in `ai.py`)
+- [x] Bound input by trimming history to the last N messages so a long chat does not grow cost unbounded
+- [x] Note expected per-call cost order of magnitude in `ai.py`/docs (board + short history on nano is well under a cent)
+
+Tests (`pytest`, network mocked):
+- [x] `POST /api/ai/chat` logged in, fake returns `reply` + a modified `board`: 200, response carries both, and a follow-up `GET /api/board` reflects the persisted change
+- [x] Fake returns `reply` with `board: null`: 200, reply returned, board unchanged
+- [x] Logged out returns `401`; empty/missing message returns `422`
+- [x] Injected client raises -> `503`, no key/secret in the body
+- [x] A fake returning an invalid board (dropped column and dangling cardId) is rejected and not persisted
+- [x] The request actually includes the current board and history (asserted via a spy fake capturing the messages passed to `parse`)
+- [x] Existing Part 2/4/6/8 suites still pass
+- [x] Live test (opt-in via `RUN_LIVE_AI=1`): a real call like "add a card titled 'Write docs' to Backlog" returns a non-empty reply and a board containing that card under the Backlog column
+- [x] Manual: covered by the opt-in live test (real OpenAI call -> validated -> persisted via the same app)
+
+Success criteria:
+- A logged-in `POST /api/ai/chat` always sends the current board + recent history and returns a Structured Output `{ reply, board }`; the schema is enforced by the model (strict) and the response validates as `BoardData | null`.
+- The AI can create, edit, move, and delete cards and rename columns via the returned board; column ids/count stay fixed and an inconsistent board is rejected, never persisted.
+- A valid board update is persisted server-side (a follow-up `GET /api/board` reflects it) and returned for Part 10 to render; a question-only turn leaves the board unchanged.
+- Logged-out is `401`, empty message is `422`, and an OpenAI/parse failure is a clean `503` with no key leakage.
+- Calls stay within budget: cheapest model, output-token-capped, history-bounded, on-demand only, under the dashboard hard limit.
+- All backend suites pass (new chat tests plus the existing health/auth/board/ai-ping tests), and the opt-in live test demonstrates a real board edit end to end.
+
+Status: VERIFIED. `POST /api/ai/chat` (auth-gated) loads the user's board, sends a system prompt + current board JSON + last 10 history messages, and gets OpenAI Structured Outputs `{reply, board}` via `ai.parse` (`chat.completions.parse`, strict). Deviation from the outline: the AI-facing `AIBoard` uses `cards` as a list (strict Structured Outputs rejects dynamic-key maps); the route converts it back to the stored `BoardData` map. A returned board is validated (fixed 5 column ids; no dangling/orphaned/duplicate card placements) and only persisted via `save_board` if valid (`502` otherwise); `board: null` leaves the board untouched. Backend `pytest` 26 passed, 2 skipped (8 new chat tests: persisted update, null-board no-op, `401`, `422` empty/whitespace, `503` on failure with no `sk-` leak, rejected changed-columns, rejected dangling cardId, and a spy asserting board+history are actually sent); existing health/auth/board/ai-ping suites stayed green. Opt-in live test (`RUN_LIVE_AI=1`) made a real call ("add a card titled 'Write docs' to Backlog") that returned a reply and a board containing the new card under Backlog, validated and persisted - end-to-end proven. Budget: `gpt-4.1-nano`, `max_completion_tokens=2000`, history capped at 10, on-demand only.
+
+---
+
+## Part 10 (outline, expanded before it is built)
 
 ### Part 10 - AI chat sidebar
 Add a polished sidebar chat widget. When the AI returns a board update, apply it and refresh the UI automatically.

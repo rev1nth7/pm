@@ -1,5 +1,7 @@
+import json
 import os
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -39,6 +41,69 @@ class Column(BaseModel):
 class BoardData(BaseModel):
     columns: list[Column]
     cards: dict[str, Card]
+
+
+# AI-facing board: cards as a list, not a map. OpenAI Structured Outputs (strict)
+# does not support dynamic-key objects, so we use a list here and convert.
+class AIBoard(BaseModel):
+    columns: list[Column]
+    cards: list[Card]
+
+
+class AIChatResponse(BaseModel):
+    reply: str
+    board: AIBoard | None
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+
+
+MAX_HISTORY = 10  # bound input cost: only the most recent turns are sent
+
+AI_SYSTEM_PROMPT = (
+    "You are a project management assistant for a Kanban board. "
+    "You receive the user's current board as JSON and their messages. "
+    "You can create, edit, move, and delete cards, and rename column titles.\n"
+    "Rules:\n"
+    "- Keep exactly the same columns with the same ids; you may only change their titles. "
+    "Never add or remove columns.\n"
+    "- Each card has a unique id, a title, and details. When creating a card, invent a new "
+    "unique id that does not collide with any existing id.\n"
+    "- In the board you return, every card in `cards` must be placed in exactly one column's "
+    "`cardIds`, and every id in `cardIds` must have a matching card in `cards`.\n"
+    "- The board uses `cards` as a list of card objects (not a map).\n"
+    "- If the user only asks a question and no board change is needed, set board to null.\n"
+    "- Always put a short, friendly user-facing message in reply."
+)
+
+
+def _board_to_ai_shape(board: dict) -> dict:
+    # Present the stored board (cards map) to the model with cards as a list.
+    return {"columns": board["columns"], "cards": list(board["cards"].values())}
+
+
+def _ai_board_to_stored(board: AIBoard) -> dict:
+    return {
+        "columns": [column.model_dump() for column in board.columns],
+        "cards": {card.id: card.model_dump() for card in board.cards},
+    }
+
+
+def _validate_ai_board(new_board: dict, current: dict) -> None:
+    # Columns are fixed: same ids, same count (titles may differ).
+    if sorted(c["id"] for c in new_board["columns"]) != sorted(c["id"] for c in current["columns"]):
+        raise HTTPException(status_code=502, detail="AI returned an invalid board (columns changed)")
+
+    placed = [card_id for column in new_board["columns"] for card_id in column["cardIds"]]
+    # No card placed twice, and placements match the cards map exactly (no dangling/orphaned).
+    if len(placed) != len(set(placed)) or set(placed) != set(new_board["cards"].keys()):
+        raise HTTPException(status_code=502, detail="AI returned an inconsistent board")
 
 
 def create_app(
@@ -106,6 +171,32 @@ def create_app(
         except ai.AIError:
             raise HTTPException(status_code=503, detail="AI service unavailable")
         return {"ok": True, "model": ai_client.model, "answer": answer}
+
+    @app.post("/api/ai/chat")
+    def ai_chat(req: ChatRequest, user: str = Depends(current_user)):
+        if not req.messages or req.messages[-1].role != "user" or not req.messages[-1].content.strip():
+            raise HTTPException(status_code=422, detail="A user message is required")
+
+        board = db.get_board(db_path, user)
+        history = req.messages[-MAX_HISTORY:]
+        messages = [
+            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "system", "content": "Current board JSON:\n" + json.dumps(_board_to_ai_shape(board))},
+            *({"role": m.role, "content": m.content} for m in history),
+        ]
+
+        try:
+            result = ai_client.parse(messages, AIChatResponse)
+        except ai.AIError:
+            raise HTTPException(status_code=503, detail="AI service unavailable")
+
+        if result.board is None:
+            return {"reply": result.reply, "board": None}
+
+        new_board = _ai_board_to_stored(result.board)
+        _validate_ai_board(new_board, board)
+        saved = db.save_board(db_path, user, new_board)
+        return {"reply": result.reply, "board": saved}
 
     # Serve the exported Next.js frontend at /. Mounted last so /api/* wins.
     static_dir.mkdir(parents=True, exist_ok=True)
