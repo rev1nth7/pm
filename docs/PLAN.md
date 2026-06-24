@@ -233,10 +233,58 @@ Status: VERIFIED. Frontend unit 11 passed (`KanbanBoard` loads from the API, and
 
 ---
 
-## Parts 8-10 (outlines, expanded before each is built)
+## Part 8 - AI connectivity
 
-### Part 8 - AI connectivity
-Add a backend OpenAI call; validate end to end with a simple "2+2" connectivity test.
+Goal: prove the backend can reach OpenAI end to end. Add a thin server-side AI client and one authenticated connectivity route that asks the model a trivial question ("what is 2+2?") and returns its answer. This part is plumbing and proof-of-life only - no board context, no Structured Outputs, no frontend (those are Parts 9-10).
+
+Approach: load the project-root `.env` so the backend sees `OPENAI_API_KEY` in local dev (Docker passes it via env), add the official `openai` SDK as a backend dependency, and isolate all OpenAI usage in a small `ai.py` module. The connectivity route reuses Part 4's auth so the endpoint (and the API spend behind it) is not anonymous. Following the `create_app(db_path=...)` pattern, the AI client is injectable so tests never hit the network, with one opt-in live test that really calls OpenAI.
+
+Config / dependencies:
+- [x] Add `openai` to `backend/pyproject.toml` dependencies; add `python-dotenv` so the root `.env` is loaded in local dev (`uv sync` to update `uv.lock`)
+- [x] Load the project-root `.env` at startup (no-op if absent, e.g. in Docker where env is passed directly); never log or echo the key
+- [x] Read `OPENAI_API_KEY` from the environment and the model name from `OPENAI_MODEL` (default `gpt-4.1-nano`, documented fallback `gpt-4o-mini`)
+
+AI client (`backend/app/ai.py`):
+- [x] A small wrapper that constructs an OpenAI client from `OPENAI_API_KEY` and exposes one function, e.g. `ask(prompt: str) -> str`, returning the model's text reply
+- [x] Define a minimal client protocol/interface so a fake client can be injected in tests (no network)
+- [x] Surface a clear, key-free error when the API key is missing or the OpenAI call fails (no secret material in the message)
+
+Connectivity route (auth-protected):
+- [x] `GET /api/ai/ping`: depends on the session user (`401` when logged out); calls `ask("What is 2+2? Reply with just the number.")` and returns `{ "ok": true, "model": "<model>", "answer": "<text>" }`
+- [x] On OpenAI failure or missing key, return `503` with a short, safe error message (not `500`, and no key leakage)
+- [x] `create_app(...)` accepts an injectable AI client (default: the real one) so tests pass a fake; keeps `/api/*` registered before the static mount
+
+Budget / cost control (keep API calls within budget):
+- [x] Hard ceiling lives in the OpenAI dashboard: set a monthly usage hard limit on the account (the real safety net; out-of-code so no key handling here) - documented in the plan/README *(manual user step: OpenAI dashboard > Settings > Limits)*
+- [x] Default to the cheapest capable model `gpt-4.1-nano`; the connectivity prompt is tiny and the call is on-demand only (no polling, no background loop, no retry storms)
+- [x] Cap output with `max_completion_tokens` on every call (small for the ping; sized deliberately in Parts 9-10) so a runaway response cannot inflate cost
+- [x] Note the per-call cost order of magnitude in `ai.py`/docs (a 2+2 call is a fraction of a cent) so the budget impact is explicit going into Parts 9-10, where board + history are sent each message
+
+Docker / scripts:
+- [x] Ensure `OPENAI_API_KEY` (and optional `OPENAI_MODEL`) reach the container: `scripts/start.*` pass them through (`--env-file .env`, guarded so it is optional); confirm `.env` stays gitignored
+- [ ] Confirm the image still builds (the `openai` dep installs cleanly under `uv`) - DEFERRED (Docker daemon down)
+
+Tests (`pytest`, network mocked):
+- [x] `GET /api/ai/ping` while logged in, with a fake AI client returning "4", returns 200 and `{ ok: true, answer: "4", model: ... }`
+- [x] `GET /api/ai/ping` while logged out returns `401`
+- [x] When the injected client raises (simulated API failure), the route returns `503` and no key/secret appears in the response
+- [x] Existing Part 2/4/6 suites still pass (health, hello, auth, board)
+- [x] Live connectivity test (opt-in via `RUN_LIVE_AI=1` rather than mere key presence, since `.env` auto-loads the key on every run): a real call to OpenAI for "2+2" returns an answer containing "4"
+- [ ] Manual: in the running container, log in and hit `/api/ai/ping`; confirm a real "4" answer comes back - DEFERRED (Docker daemon down)
+
+Success criteria:
+- A logged-in `GET /api/ai/ping` performs a real OpenAI call and returns the model's answer (contains "4"); a logged-out request is rejected with `401`.
+- All OpenAI access is isolated in `ai.py` behind an injectable client; mocked tests are green with no network, and the opt-in live test passes when the key is present.
+- A missing key or an OpenAI error yields a clean `503` with no secret leakage, never an unhandled `500`.
+- The key is read from env/`.env` only, never committed or logged; the Docker image builds and the container can make the call with the key passed through.
+- Calls stay within budget: an OpenAI dashboard monthly hard limit is set, the cheapest model (`gpt-4.1-nano`) is used, every call is output-token-capped, and calls happen only on demand (no polling/background spend).
+- All backend suites pass (new AI tests plus the existing health/auth/board tests).
+
+Status: VERIFIED (container build/manual deferred - Docker daemon down). All OpenAI access is isolated in `app/ai.py` behind an injectable `AIClient` (real `OpenAIClient` default; `FakeAI` in tests), output-token-capped (`max_completion_tokens=16`) on `gpt-4.1-nano`. `GET /api/ai/ping` is auth-gated and returns `{ok, model, answer}`; OpenAI/missing-key failures map to a clean `503` with no key leakage. Backend `pytest` 18 passed, 1 skipped (3 new mocked AI tests: 200+answer, `401` logged out, `503` on failure with no `sk-` in body); the existing health/auth/board suites stayed green. The opt-in live test (`RUN_LIVE_AI=1`) made a real OpenAI call and returned an answer containing "4" - end-to-end connectivity proven. `.env` is loaded at startup (root `.env`, gitignored) and `scripts/start.*` pass it through via guarded `--env-file .env`. Budget ceiling: set the OpenAI dashboard monthly hard limit (manual). Rerun the container smoke once Docker is up to close the build/manual loop.
+
+---
+
+## Parts 9-10 (outlines, expanded before each is built)
 
 ### Part 9 - AI with Structured Outputs
 Always call the AI with the board JSON plus the user's question and conversation history. The AI returns Structured Outputs containing a user-facing reply and an optional board update. Thorough tests.

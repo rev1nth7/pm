@@ -1,12 +1,16 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import db
+from app import ai, db
+
+# Load the project-root .env for local dev (no-op in Docker, where env is passed in).
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 DEFAULT_STATIC_DIR = Path(__file__).parent / "static"
 
@@ -37,9 +41,14 @@ class BoardData(BaseModel):
     cards: dict[str, Card]
 
 
-def create_app(static_dir: Path = DEFAULT_STATIC_DIR, db_path: Path | None = None) -> FastAPI:
+def create_app(
+    static_dir: Path = DEFAULT_STATIC_DIR,
+    db_path: Path | None = None,
+    ai_client: ai.AIClient | None = None,
+) -> FastAPI:
     db_path = Path(db_path) if db_path else db.resolve_db_path()
     db.init_db(db_path)
+    ai_client = ai_client or ai.OpenAIClient()
 
     app = FastAPI(title="Project Management MVP")
 
@@ -88,6 +97,15 @@ def create_app(static_dir: Path = DEFAULT_STATIC_DIR, db_path: Path | None = Non
     @app.put("/api/board")
     def update_board(board: BoardData, user: str = Depends(current_user)):
         return db.save_board(db_path, user, board.model_dump())
+
+    @app.get("/api/ai/ping")
+    def ai_ping(user: str = Depends(current_user)):
+        # Connectivity proof-of-life: tiny on-demand call, output-token capped.
+        try:
+            answer = ai_client.ask("What is 2+2? Reply with just the number.")
+        except ai.AIError:
+            raise HTTPException(status_code=503, detail="AI service unavailable")
+        return {"ok": True, "model": ai_client.model, "answer": answer}
 
     # Serve the exported Next.js frontend at /. Mounted last so /api/* wins.
     static_dir.mkdir(parents=True, exist_ok=True)
