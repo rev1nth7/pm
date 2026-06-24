@@ -3,10 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { KanbanBoard } from "@/components/KanbanBoard";
 import { initialData } from "@/lib/kanban";
 import * as boardApi from "@/lib/board";
+import * as chatApi from "@/lib/chat";
 
 vi.mock("@/lib/board");
+vi.mock("@/lib/chat");
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(boardApi.getBoard).mockResolvedValue(structuredClone(initialData));
   vi.mocked(boardApi.saveBoard).mockResolvedValue(structuredClone(initialData));
 });
@@ -65,5 +68,27 @@ describe("KanbanBoard", () => {
 
     expect(within(column).getByText("Updated title")).toBeInTheDocument();
     await waitFor(() => expect(boardApi.saveBoard).toHaveBeenCalled());
+  });
+
+  it("refreshes from an AI chat board update without re-saving", async () => {
+    const updated = structuredClone(initialData);
+    updated.cards["card-ai"] = { id: "card-ai", title: "AI card", details: "" };
+    updated.columns[0].cardIds.push("card-ai");
+    vi.mocked(chatApi.sendChat).mockResolvedValue({ reply: "Added it.", board: updated });
+
+    render(<KanbanBoard />);
+    await screen.findAllByTestId(/column-/i);
+
+    await userEvent.click(screen.getByRole("button", { name: /ask ai/i }));
+    await userEvent.type(
+      screen.getByLabelText(/message the assistant/i),
+      "add an AI card"
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^send$/i }));
+
+    // The board reflects the AI's change...
+    expect(await screen.findByText("AI card")).toBeInTheDocument();
+    // ...and the already-persisted board is not saved again.
+    expect(boardApi.saveBoard).not.toHaveBeenCalled();
   });
 });

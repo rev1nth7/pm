@@ -345,7 +345,45 @@ Status: VERIFIED. `POST /api/ai/chat` (auth-gated) loads the user's board, sends
 
 ---
 
-## Part 10 (outline, expanded before it is built)
+## Part 10 - AI chat sidebar
 
-### Part 10 - AI chat sidebar
-Add a polished sidebar chat widget. When the AI returns a board update, apply it and refresh the UI automatically.
+Goal: add the user-facing AI chat. A polished, brand-styled sidebar lets the signed-in user converse with the assistant; each turn calls the Part 9 `POST /api/ai/chat`, shows the reply, and - when the response carries a board - refreshes the Kanban board in place automatically. This is the frontend half of the AI feature and completes the MVP.
+
+Approach: add a small `lib/chat.ts` API helper and a `ChatSidebar` component holding the conversation state. Render `ChatSidebar` inside `KanbanBoard` so it can hand a returned board straight to `setBoard`. Because Part 9 already validated and persisted the AI's board, the sidebar refreshes the UI to that board without re-saving: it sets the existing `skipNextSave` guard before `setBoard`, so the debounced `saveBoard` effect does not fire a redundant `PUT`. The sidebar calls the API only on an explicit send (never on open/typing), matching the budget posture.
+
+Chat API helper (`frontend/src/lib/chat.ts`):
+- [x] `type ChatMessage = { role: "user" | "assistant"; content: string }` (the role union the backend accepts)
+- [x] `sendChat(messages: ChatMessage[]): Promise<{ reply: string; board: BoardData | null }>` - same-origin credentialed `POST /api/ai/chat`; throw on non-2xx (reuse `BoardData` from `lib/kanban`)
+
+ChatSidebar component (`frontend/src/components/ChatSidebar.tsx`):
+- [x] Maintain `messages: ChatMessage[]` state; render the transcript (user vs assistant visually distinct) and auto-scroll to the latest
+- [x] Input + send control; submit appends the user message, calls `sendChat` with the running history, then appends the assistant `reply`
+- [x] Loading state while in flight ("Thinking...") and the send control disabled during the request (prevents duplicate/extra API calls - budget)
+- [x] Error state if the call fails (e.g. a `503`), with the user message preserved so they can retry; no crash
+- [x] When the response includes a `board`, call an `onBoardUpdate(board)` prop so the board refreshes
+- [x] Collapsible: a toggle to open/close the sidebar (right-side drawer/panel) so it does not crowd the board; styled with the brand colors (purple action, blue accents, navy headings)
+
+Wire into the board (`KanbanBoard.tsx`):
+- [x] Render `ChatSidebar` within `KanbanBoard`, passing `onBoardUpdate`
+- [x] `onBoardUpdate(board)` sets `skipNextSave.current = true` then `setBoard(board)` so the AI's already-persisted board updates the UI without triggering a redundant `saveBoard` PUT
+- [x] The board re-renders from the new state (columns/cards reflect the AI's create/edit/move/delete) with no page reload
+
+Budget / cost control (frontend):
+- [x] API is called only on explicit send - no calls on mount, open, or keystroke; send disabled while a request is pending
+- [x] Send the conversation history as-is (the backend already trims to the last 10 and caps output tokens); no client-side polling or retries
+
+Tests:
+- [x] Frontend unit (Vitest): mock `@/lib/chat`; `ChatSidebar` renders, sending a message shows the user message then the assistant reply; a failed `sendChat` shows an error and keeps the typed message; when `sendChat` returns a board, `onBoardUpdate` is called with it
+- [x] Frontend unit (Vitest): in `KanbanBoard`, a chat-driven board update refreshes the rendered board (new card visible) and does NOT trigger `saveBoard` (the `skipNextSave` path)
+- [x] Frontend e2e (Playwright): mock `/api/me`, `/api/board`, and `POST /api/ai/chat` (returns `{ reply, board }` with an added card); open the sidebar, send a message, see the reply, and see the new card appear on the board
+- [x] Existing suites stay green (backend pytest, other frontend unit/e2e)
+- [ ] Manual (real backend, in the container): log in, open the chat, ask the AI to add/move/rename, watch the board update live, and confirm it persists across reload - DEFERRED (Docker daemon down)
+
+Success criteria:
+- A signed-in user can open the sidebar, send a message, and see the assistant's reply; the sidebar is brand-styled and does not disrupt the board layout.
+- When the AI returns a board update, the Kanban board refreshes in place automatically (created/edited/moved/deleted cards, renamed columns) with no page reload and no redundant save (the change is already persisted by Part 9).
+- A chat with no board change just shows the reply and leaves the board untouched; an API failure shows an error and preserves the typed message rather than crashing.
+- The API is called only on explicit send (no background/polling spend), keeping the feature within budget.
+- All suites green (backend pytest, frontend unit, frontend e2e) plus a manual end-to-end check against the real backend; the MVP is complete (sign in, board, drag/edit, and AI chat that edits the board).
+
+Status: VERIFIED (container manual deferred - Docker daemon down). `lib/chat.ts` `sendChat` POSTs to `/api/ai/chat` (credentialed); `ChatSidebar` is a collapsible right-side drawer ("Ask AI" toggle) holding the conversation, with a transcript (user/assistant bubbles), "Thinking..." state, send disabled while pending, and an error state that preserves the typed message. It is rendered inside `KanbanBoard`; `onBoardUpdate` sets `skipNextSave` before `setBoard`, so an AI board update refreshes the UI with no redundant `PUT`. Frontend unit 15 passed (4 new: ChatSidebar send/reply, board callback, error-preserves-message, and KanbanBoard refresh-without-save - the last required clearing mock call counts between tests via `vi.clearAllMocks()`). Frontend e2e 6 passed (new: open sidebar -> send -> reply shown -> AI's new card appears on the board). `npm run build` is clean (TypeScript passes). Backend `pytest` 26 passed, 2 skipped - unchanged. Budget: the API is called only on explicit send, send disabled while in flight, history sent as-is (backend trims to 10). MVP complete: sign in, persistent board with drag/edit, and an AI chat that edits the board.

@@ -13,6 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
+import { ChatSidebar } from "@/components/ChatSidebar";
 import { createId, moveCard, type BoardData } from "@/lib/kanban";
 import { getBoard, saveBoard } from "@/lib/board";
 
@@ -134,6 +135,13 @@ export const KanbanBoard = ({ onLogout }: { onLogout?: () => void }) => {
           },
         }
     );
+  };
+
+  // The AI's board was already validated and persisted server-side (Part 9), so
+  // refresh the UI without re-saving it (skip the next debounced PUT).
+  const handleBoardUpdate = (next: BoardData) => {
+    skipNextSave.current = true;
+    setBoard(next);
   };
 
   const handleDeleteCard = (columnId: string, cardId: string) => {
@@ -266,6 +274,8 @@ export const KanbanBoard = ({ onLogout }: { onLogout?: () => void }) => {
           </DragOverlay>
         </DndContext>
       </main>
+
+      <ChatSidebar onBoardUpdate={handleBoardUpdate} />
     </div>
   );
 };

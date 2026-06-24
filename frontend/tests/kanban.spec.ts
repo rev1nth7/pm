@@ -77,6 +77,29 @@ test.describe("kanban board (authenticated)", () => {
     await expect(card.getByText("Edited via e2e.")).toBeVisible();
   });
 
+  test("AI chat returns a board update and the board refreshes", async ({ page }) => {
+    const updatedBoard = structuredClone(seedBoard);
+    updatedBoard.cards["card-ai"] = {
+      id: "card-ai",
+      title: "AI added card",
+      details: "Created by the assistant.",
+    };
+    updatedBoard.columns[0].cardIds.push("card-ai");
+
+    await page.route("**/api/ai/chat", (route) =>
+      route.fulfill({ json: { reply: "Added it for you.", board: updatedBoard } })
+    );
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /ask ai/i }).click();
+    await page.getByLabel(/message the assistant/i).fill("Please add a Backlog card");
+    await page.getByRole("button", { name: /^send$/i }).click();
+
+    await expect(page.getByText("Added it for you.")).toBeVisible();
+    // The new card the AI returned now appears on the board.
+    await expect(page.getByTestId("card-card-ai")).toContainText("AI added card");
+  });
+
   test("moves a card between columns", async ({ page }) => {
     await page.goto("/");
     const card = page.getByTestId("card-card-1");
