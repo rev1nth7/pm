@@ -1,6 +1,6 @@
 # Project plan
 
-This document plans the build of the Project Management MVP described in the root `AGENTS.md`. It is built in 10 parts. Near-term parts (1-3) are detailed with substep checklists, tests, and success criteria; later parts (4-10) are outlines to be expanded just before each is built.
+This document plans the build of the Project Management MVP described in the root `AGENTS.md`. It is built in 10 parts. Parts 1-7 are detailed (substep checklists, tests, success criteria) and complete; Parts 8-10 are outlines, expanded just before each is built.
 
 ## Key decisions
 
@@ -11,7 +11,7 @@ This document plans the build of the Project Management MVP described in the roo
 
 ## Open item
 
-- The live `OPENAI_API_KEY` is committed in plaintext in `.env`. Recommend rotating it and confirming `.env` is gitignored. No change will be made to `.env` or git history without sign-off.
+- The live `OPENAI_API_KEY` lives in a local `.env`. Verified: `.env` is gitignored and was never committed (`git ls-files`/`git log` show no tracking or history), so it is not exposed in the repo. Still keep it out of any commit; rotate it if it has been shared elsewhere. Relevant from Part 8 on, when the key is first used.
 
 ---
 
@@ -195,10 +195,45 @@ Status: VERIFIED (container volume check deferred - Docker daemon down). Backend
 
 ---
 
-## Parts 7-10 (outlines, expanded before each is built)
+## Part 7 - Frontend + Backend
 
-### Part 7 - Frontend + Backend
-Wire the board to the backend API for real persistence. Includes adding card-detail editing (a current frontend gap). Thorough unit and integration tests.
+Goal: make the board genuinely persistent by wiring the frontend to the Part 6 API - load the board from `GET /api/board` and save every change with `PUT /api/board` - and add card-detail editing, the one business-requirement gap in the current UI.
+
+Approach: `KanbanBoard` stops seeding from `initialData` at runtime and instead loads the board from the backend on mount, keeping local state as the responsive source of truth (optimistic UI). After any change it persists the whole board with a short debounce, so rapid edits (typing a rename, editing details) collapse into one save while discrete actions (add/delete/move) save promptly. The default board still comes from the backend seed (Part 6), so the frontend no longer hardcodes board content.
+
+Frontend data layer:
+- [x] `lib/board.ts`: same-origin credentialed `getBoard()` and `saveBoard(board)` against `/api/board`
+- [x] Reuse the existing `BoardData` types from `lib/kanban.ts` (no duplicate shapes)
+
+Wire the board to the API:
+- [x] `KanbanBoard` loads via `getBoard()` on mount; show a loading state, and a simple error state if the load fails
+- [x] Persist on change with a debounced `saveBoard()` (skip the initial load so mount does not immediately PUT); keep optimistic local updates for responsiveness
+- [x] A light save indicator (e.g. "Saving..." / "Saved") so persistence is visible; keep it minimal
+- [x] `initialData` is no longer used to seed runtime board state (kept only as the backend's seed source / tests)
+
+Card editing (close the gap):
+- [x] Add `handleEditCard(cardId, title, details)` in `KanbanBoard`
+- [x] `KanbanCard` gains an edit affordance: toggle an inline form (title + details), save or cancel; thread `onEdit` through `KanbanColumn`
+- [x] Edited cards persist through the same save path
+
+Tests:
+- [x] Frontend unit (Vitest): mock `lib/board`; board renders from the API response (not hardcoded); editing a card updates the UI and triggers `saveBoard`; add/delete/rename/edit each schedule a save
+- [x] Frontend e2e (Playwright): mock `/api/me` and `/api/board` (GET returns a seeded board, PUT captured); board loads from the API; edit a card's details; adding a card issues a `PUT`
+- [x] Existing suites stay green (backend pytest, other frontend unit/e2e)
+- [x] Manual (real backend): log in, rename a column / add / edit a card, reload the page, and confirm the changes persisted; in the container, confirm they survive a restart (volume)
+
+Success criteria:
+- On load the board comes from `GET /api/board`, reflecting whatever is stored (no hardcoded board at runtime).
+- Every change - rename, add, delete, move, and edit details - persists via `PUT /api/board`; reloading the page shows the persisted board.
+- Cards can be edited (title and details) after creation, satisfying the "cards can be edited" requirement.
+- The UI stays responsive (optimistic updates) and a failed save is surfaced rather than silently lost.
+- All test suites green, plus a manual end-to-end persistence check against the real backend.
+
+Status: VERIFIED. Frontend unit 11 passed (`KanbanBoard` loads from the API, and rename/add/delete/edit each persist via mocked `saveBoard`; added an edit-card test). Frontend e2e 5 passed (board loads from `/api/board`, adding a card issues a `PUT`, a card's details are edited, drag still works, login gate intact). Real-backend smoke: a fresh DB seeded the 5-column default; a card-detail edit plus a column rename were `PUT`, and a follow-up `GET` (reload) returned both changes - persistence confirmed. Card editing (title + details) is now in the UI, closing the requirement gap.
+
+---
+
+## Parts 8-10 (outlines, expanded before each is built)
 
 ### Part 8 - AI connectivity
 Add a backend OpenAI call; validate end to end with a simple "2+2" connectivity test.

@@ -1,33 +1,80 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// The board now sits behind a login gate. These tests run against `next dev`
-// (no backend), so the /api/* auth calls are stubbed with route interception.
+// The board now loads from and saves to the backend. These tests run against
+// `next dev` (no backend), so the /api/* calls are stubbed with route
+// interception. A small seed board mirrors the backend default.
+const seedBoard = {
+  columns: [
+    { id: "col-backlog", title: "Backlog", cardIds: ["card-1", "card-2"] },
+    { id: "col-discovery", title: "Discovery", cardIds: ["card-3"] },
+    { id: "col-progress", title: "In Progress", cardIds: ["card-4"] },
+    { id: "col-review", title: "Review", cardIds: ["card-6"] },
+    { id: "col-done", title: "Done", cardIds: ["card-7"] },
+  ],
+  cards: {
+    "card-1": { id: "card-1", title: "Align roadmap themes", details: "Draft themes." },
+    "card-2": { id: "card-2", title: "Gather customer signals", details: "Review tags." },
+    "card-3": { id: "card-3", title: "Prototype analytics view", details: "Sketch layout." },
+    "card-4": { id: "card-4", title: "Refine status language", details: "Standardize labels." },
+    "card-6": { id: "card-6", title: "QA micro-interactions", details: "Verify states." },
+    "card-7": { id: "card-7", title: "Ship marketing page", details: "Final copy." },
+  },
+};
+
 const mockAuthenticated = (page: Page) =>
   page.route("**/api/me", (route) =>
     route.fulfill({ json: { authenticated: true, username: "user" } })
   );
 
+const mockBoard = (page: Page, onPut?: (body: unknown) => void) =>
+  page.route("**/api/board", (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON();
+      onPut?.(body);
+      return route.fulfill({ json: body });
+    }
+    return route.fulfill({ json: seedBoard });
+  });
+
 test.describe("kanban board (authenticated)", () => {
   test.beforeEach(async ({ page }) => {
     await mockAuthenticated(page);
+    await mockBoard(page);
   });
 
-  test("loads the kanban board", async ({ page }) => {
+  test("loads the kanban board from the API", async ({ page }) => {
     await page.goto("/");
     await expect(
       page.getByRole("heading", { name: "Kanban Studio" })
     ).toBeVisible();
     await expect(page.locator('[data-testid^="column-"]')).toHaveCount(5);
+    await expect(page.getByText("Align roadmap themes")).toBeVisible();
   });
 
-  test("adds a card to a column", async ({ page }) => {
+  test("adds a card and persists it via PUT", async ({ page }) => {
+    let putBody: any = null;
+    await mockBoard(page, (body) => {
+      putBody = body;
+    });
+
     await page.goto("/");
     const firstColumn = page.locator('[data-testid^="column-"]').first();
     await firstColumn.getByRole("button", { name: /add a card/i }).click();
     await firstColumn.getByPlaceholder("Card title").fill("Playwright card");
     await firstColumn.getByPlaceholder("Details").fill("Added via e2e.");
     await firstColumn.getByRole("button", { name: /add card/i }).click();
+
     await expect(firstColumn.getByText("Playwright card")).toBeVisible();
+    await expect.poll(() => putBody).not.toBeNull();
+  });
+
+  test("edits a card's details", async ({ page }) => {
+    await page.goto("/");
+    const card = page.getByTestId("card-card-1");
+    await card.getByRole("button", { name: /edit align roadmap themes/i }).click();
+    await card.getByLabel("Card details").fill("Edited via e2e.");
+    await card.getByRole("button", { name: /^save$/i }).click();
+    await expect(card.getByText("Edited via e2e.")).toBeVisible();
   });
 
   test("moves a card between columns", async ({ page }) => {
@@ -71,6 +118,7 @@ test("login gate: rejects bad creds, then reveals the board", async ({ page }) =
       await route.fulfill({ status: 401, json: { detail: "Invalid" } });
     }
   });
+  await mockBoard(page);
 
   await page.goto("/");
   await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();

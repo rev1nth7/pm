@@ -1,8 +1,16 @@
 import { render, screen } from "@testing-library/react";
 import { AuthGate } from "@/components/AuthGate";
+import { initialData } from "@/lib/kanban";
 import * as auth from "@/lib/auth";
+import * as boardApi from "@/lib/board";
 
 vi.mock("@/lib/auth");
+vi.mock("@/lib/board");
+
+beforeEach(() => {
+  vi.mocked(boardApi.getBoard).mockResolvedValue(structuredClone(initialData));
+  vi.mocked(boardApi.saveBoard).mockResolvedValue(structuredClone(initialData));
+});
 
 describe("AuthGate", () => {
   it("shows the login screen when not authenticated", async () => {

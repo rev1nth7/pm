@@ -21,20 +21,21 @@ A client-only Next.js demo of the Kanban board. It runs fully in the browser wit
 - `src/components/`
   - `AuthGate.tsx` - on load calls `GET /api/me`; renders `Login` when logged out, `KanbanBoard` (with logout) when logged in
   - `Login.tsx` - brand-styled sign-in form; posts to `/api/login`
-  - `KanbanBoard.tsx` - owns board state and drag handlers; renders columns; optional `onLogout` adds a logout control in the header
+  - `KanbanBoard.tsx` - loads the board from `GET /api/board` on mount, keeps optimistic local state, and persists changes with a debounced `PUT /api/board`; shows loading/error and a save indicator; optional `onLogout` adds a logout control
   - `KanbanColumn.tsx` - droppable column with editable title and card count
-  - `KanbanCard.tsx` - draggable card (title, details, remove button)
+  - `KanbanCard.tsx` - draggable card; inline edit form (title + details), edit/remove controls
   - `KanbanCardPreview.tsx` - card shown in the drag overlay
   - `NewCardForm.tsx` - collapsible add-card form
-- `src/lib/kanban.ts` - types `Card`, `Column`, `BoardData`; `initialData` (5 columns, 8 cards); `moveCard()` reorder/move logic; `createId()` id generator
+- `src/lib/kanban.ts` - types `Card`, `Column`, `BoardData`; `initialData` (used by tests; the backend owns the runtime seed); `moveCard()` reorder/move logic; `createId()` id generator
 - `src/lib/auth.ts` - same-origin, credentialed auth helpers: `getMe()`, `login()`, `logout()`
+- `src/lib/board.ts` - same-origin, credentialed board persistence: `getBoard()`, `saveBoard()`
 - `tests/kanban.spec.ts` - Playwright e2e tests
 
 ## Data and state
 
-- Board state lives in `KanbanBoard` via `useState`, seeded from `initialData` in `src/lib/kanban.ts`.
+- Board state lives in `KanbanBoard` via `useState`, loaded from `GET /api/board` on mount.
 - Normalized shape: `columns[]` (each with ordered `cardIds[]`) plus a `cards` lookup keyed by id.
-- Everything is in memory. There is no persistence or backend; a refresh resets to `initialData`.
+- Changes are optimistic locally and persisted to the backend with a debounced `PUT /api/board`; a reload reflects the stored board.
 
 ## Styling
 
@@ -55,8 +56,4 @@ A client-only Next.js demo of the Kanban board. It runs fully in the browser wit
 - `npm run lint` - ESLint
 
 ## Known gaps (handled in later project parts)
-
-- No backend integration or persistence for the board itself (Parts 6-7)
-- No card-detail editing after creation (Part 7)
 - No AI chat sidebar (Part 10)
-- Not yet configured for static export / Docker serving (Part 3)

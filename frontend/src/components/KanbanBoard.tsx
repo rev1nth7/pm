@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -13,11 +13,25 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
-import { createId, initialData, moveCard, type BoardData } from "@/lib/kanban";
+import { createId, moveCard, type BoardData } from "@/lib/kanban";
+import { getBoard, saveBoard } from "@/lib/board";
+
+type LoadStatus = "loading" | "ready" | "error";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+const SAVE_LABELS: Record<SaveStatus, string> = {
+  idle: "",
+  saving: "Saving...",
+  saved: "Saved",
+  error: "Save failed",
+};
 
 export const KanbanBoard = ({ onLogout }: { onLogout?: () => void }) => {
-  const [board, setBoard] = useState<BoardData>(() => initialData);
+  const [board, setBoard] = useState<BoardData | null>(null);
+  const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const skipNextSave = useRef(true);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -25,7 +39,39 @@ export const KanbanBoard = ({ onLogout }: { onLogout?: () => void }) => {
     })
   );
 
-  const cardsById = useMemo(() => board.cards, [board.cards]);
+  // Load the board from the backend on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getBoard()
+      .then((data) => {
+        if (cancelled) return;
+        skipNextSave.current = true;
+        setBoard(data);
+        setLoadStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setLoadStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Persist the whole board on change, debounced so rapid edits collapse into one save.
+  useEffect(() => {
+    if (board === null) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    setSaveStatus("saving");
+    const handle = setTimeout(() => {
+      saveBoard(board)
+        .then(() => setSaveStatus("saved"))
+        .catch(() => setSaveStatus("error"));
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [board]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
@@ -34,62 +80,100 @@ export const KanbanBoard = ({ onLogout }: { onLogout?: () => void }) => {
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveCardId(null);
-
     if (!over || active.id === over.id) {
       return;
     }
-
-    setBoard((prev) => ({
-      ...prev,
-      columns: moveCard(prev.columns, active.id as string, over.id as string),
-    }));
+    setBoard(
+      (prev) =>
+        prev && {
+          ...prev,
+          columns: moveCard(prev.columns, active.id as string, over.id as string),
+        }
+    );
   };
 
   const handleRenameColumn = (columnId: string, title: string) => {
-    setBoard((prev) => ({
-      ...prev,
-      columns: prev.columns.map((column) =>
-        column.id === columnId ? { ...column, title } : column
-      ),
-    }));
+    setBoard(
+      (prev) =>
+        prev && {
+          ...prev,
+          columns: prev.columns.map((column) =>
+            column.id === columnId ? { ...column, title } : column
+          ),
+        }
+    );
   };
 
   const handleAddCard = (columnId: string, title: string, details: string) => {
     const id = createId("card");
-    setBoard((prev) => ({
-      ...prev,
-      cards: {
-        ...prev.cards,
-        [id]: { id, title, details: details || "No details yet." },
-      },
-      columns: prev.columns.map((column) =>
-        column.id === columnId
-          ? { ...column, cardIds: [...column.cardIds, id] }
-          : column
-      ),
-    }));
+    setBoard(
+      (prev) =>
+        prev && {
+          ...prev,
+          cards: {
+            ...prev.cards,
+            [id]: { id, title, details: details || "No details yet." },
+          },
+          columns: prev.columns.map((column) =>
+            column.id === columnId
+              ? { ...column, cardIds: [...column.cardIds, id] }
+              : column
+          ),
+        }
+    );
+  };
+
+  const handleEditCard = (cardId: string, title: string, details: string) => {
+    setBoard(
+      (prev) =>
+        prev && {
+          ...prev,
+          cards: {
+            ...prev.cards,
+            [cardId]: { ...prev.cards[cardId], title, details },
+          },
+        }
+    );
   };
 
   const handleDeleteCard = (columnId: string, cardId: string) => {
-    setBoard((prev) => {
-      return {
-        ...prev,
-        cards: Object.fromEntries(
-          Object.entries(prev.cards).filter(([id]) => id !== cardId)
-        ),
-        columns: prev.columns.map((column) =>
-          column.id === columnId
-            ? {
-                ...column,
-                cardIds: column.cardIds.filter((id) => id !== cardId),
-              }
-            : column
-        ),
-      };
-    });
+    setBoard(
+      (prev) =>
+        prev && {
+          ...prev,
+          cards: Object.fromEntries(
+            Object.entries(prev.cards).filter(([id]) => id !== cardId)
+          ),
+          columns: prev.columns.map((column) =>
+            column.id === columnId
+              ? {
+                  ...column,
+                  cardIds: column.cardIds.filter((id) => id !== cardId),
+                }
+              : column
+          ),
+        }
+    );
   };
 
-  const activeCard = activeCardId ? cardsById[activeCardId] : null;
+  if (loadStatus === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-[var(--gray-text)]">
+        Loading board...
+      </div>
+    );
+  }
+
+  if (loadStatus === "error" || board === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-[#c0392b]">
+        Could not load your board. Please refresh.
+      </div>
+    );
+  }
+
+  const activeCard = activeCardId ? board.cards[activeCardId] : null;
+  const saveLabel = SAVE_LABELS[saveStatus];
 
   return (
     <div className="relative overflow-hidden">
@@ -112,15 +196,25 @@ export const KanbanBoard = ({ onLogout }: { onLogout?: () => void }) => {
               </p>
             </div>
             <div className="flex flex-col items-end gap-3">
-              {onLogout ? (
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  className="rounded-full border border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--navy-dark)] transition hover:border-[var(--secondary-purple)] hover:text-[var(--secondary-purple)]"
-                >
-                  Log out
-                </button>
-              ) : null}
+              <div className="flex items-center gap-3">
+                {saveLabel ? (
+                  <span
+                    role="status"
+                    className="text-xs font-medium text-[var(--gray-text)]"
+                  >
+                    {saveLabel}
+                  </span>
+                ) : null}
+                {onLogout ? (
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="rounded-full border border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--navy-dark)] transition hover:border-[var(--secondary-purple)] hover:text-[var(--secondary-purple)]"
+                  >
+                    Log out
+                  </button>
+                ) : null}
+              </div>
               <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--surface)] px-5 py-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--gray-text)]">
                   Focus
@@ -158,6 +252,7 @@ export const KanbanBoard = ({ onLogout }: { onLogout?: () => void }) => {
                 cards={column.cardIds.map((cardId) => board.cards[cardId])}
                 onRename={handleRenameColumn}
                 onAddCard={handleAddCard}
+                onEditCard={handleEditCard}
                 onDeleteCard={handleDeleteCard}
               />
             ))}
